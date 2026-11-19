@@ -1,6 +1,8 @@
 "use strict";
 
-const STORAGE_KEY = "crestron-zum-system-planner-v1";
+const isWiredDemo = new URLSearchParams(location.search).get("demo") === "wired10";
+const projectStorage = isWiredDemo ? sessionStorage : localStorage;
+const STORAGE_KEY = isWiredDemo ? "zum-wired-demo-v1" : "crestron-zum-system-planner-v1";
 
 const icons = {
   check: '<path d="m5 12 4 4L19 6"/>',
@@ -277,7 +279,7 @@ function svgButtonLabel(iconName, text) {
 
 function loadState() {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
+    const stored = projectStorage.getItem(STORAGE_KEY);
     if (!stored) return defaultState();
     const parsed = JSON.parse(stored);
     const fresh = defaultState();
@@ -297,7 +299,7 @@ function loadState() {
 
 function saveState(message = "Saved locally") {
   state.updatedAt = new Date().toISOString();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  projectStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   const label = $("#save-state-text");
   if (label) label.textContent = message;
   window.setTimeout(() => {
@@ -306,7 +308,7 @@ function saveState(message = "Saved locally") {
 }
 
 function hasInitializedProject() {
-  return Boolean(localStorage.getItem(STORAGE_KEY));
+  return Boolean(projectStorage.getItem(STORAGE_KEY));
 }
 
 function currentStage() {
@@ -890,11 +892,11 @@ function confirmReset() {
     <div class="modal-body"><p>This cannot be undone unless you exported a JSON backup first.</p></div>
     <footer class="modal-footer"><button class="ghost-button" type="button" data-modal-close>Cancel</button><button class="danger-button" id="confirm-reset" type="button">Reset project</button></footer>`);
   $("#confirm-reset").addEventListener("click", () => {
-    localStorage.removeItem(STORAGE_KEY);
+    projectStorage.removeItem(STORAGE_KEY);
     state = defaultState();
     closeModal();
     render();
-    openWizard();
+    if (isWiredDemo) { populateWiredDemo(); render(); } else openWizard();
   });
 }
 
@@ -942,11 +944,13 @@ function renderWizard() {
         ${body}
       </div>
       <footer class="modal-footer">
+        ${wizardStep === 0 ? '<button id="wizard-demo" class="secondary-button" type="button">Try 10-space demo</button>' : ""}
         ${wizardStep > 0 ? '<button class="ghost-button" type="button" id="wizard-back">Back</button>' : ""}
         <button class="primary-button" type="submit">${svgButtonLabel(wizardStep === 2 ? "check" : "arrow", wizardStep === 2 ? "Create project" : "Continue")}</button>
       </footer>
     </form>`);
 
+  $("#wizard-demo")?.addEventListener("click", switchDemo);
   $("#wizard-back")?.addEventListener("click", () => {
     collectWizardFields();
     wizardStep -= 1;
@@ -1412,6 +1416,9 @@ $("#design-reference-button").addEventListener("click", openDesignReference);
 $("#data-tools-button").addEventListener("click", openDataTools);
 $("#mobile-menu-button").addEventListener("click", () => appShell.classList.toggle("nav-open"));
 
+$("#demo-button").innerHTML = svgButtonLabel("layers", isWiredDemo ? "Return to my project" : "Try 10-space demo");
+$("#demo-button").onclick = switchDemo;
+if (isWiredDemo && !hasInitializedProject()) populateWiredDemo();
 initSpaceEvents();
 render();
 if (!hasInitializedProject()) openWizard();
