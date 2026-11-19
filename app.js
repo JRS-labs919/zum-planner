@@ -206,6 +206,7 @@ const defaultState = () => ({
   spaces: [],
   designMode: "zum",
   project: {
+    id: newRecordId(),
     name: "Untitled Zūm project",
     number: "",
     location: "",
@@ -837,6 +838,8 @@ async function importProject(event) {
 }
 
 function seedExample() {
+  state.programFiles = [];
+  state.project.id = newRecordId();
   const now = new Date().toISOString();
   const make = record => ({ id: newRecordId(), createdAt: now, ...record });
   state.project = { ...state.project, name: "Example lighting design", number: "DEMO-001", client: "Example client", location: "Example site", architecture: "Zūm Wired", voltage: "100-277 VAC", rfFrequency: "Zūm Net wired only" };
@@ -977,11 +980,13 @@ function openReport(reportId = "projectPackage") {
   const report = REPORTS.find(item => item.id === reportId) || REPORTS.at(-1);
   showModal(`
     ${modalHeader(report.name, `${state.project.name} · Generated from current local project data`)}
+    ${report.id === "projectPackage" ? '<div class="program-package-action"><button class="primary-button" type="button" id="open-programming">Custom programming</button></div>' : ""}
     <div class="modal-body report-preview" id="printable-report">${generateReport(report.id)}</div>
     <footer class="modal-footer">
       <button class="secondary-button" type="button" id="download-report">${svgButtonLabel("download", "Download HTML")}</button>
       <button class="primary-button" type="button" id="print-report">${svgButtonLabel("printer", "Print / Save PDF")}</button>
     </footer>`, true);
+  $("#open-programming")?.addEventListener("click", () => openProgramming());
   $("#print-report").addEventListener("click", () => window.print());
   $("#download-report").addEventListener("click", () => {
     const html = standaloneReportHTML(report.name, generateReport(report.id));

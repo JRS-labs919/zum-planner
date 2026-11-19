@@ -1340,3 +1340,13 @@ svg {
   .takeoff-tools .tool-toggle span { display: inline; }
   .takeoff-tools .tool-toggle, .space-draft-tools button { min-height: 44px; padding: 6px 10px; }
 }
+
+.program-package-action { padding: 10px 24px; border-bottom: 1px solid var(--line); }
+.programming-body { overflow-x: hidden; }
+.programming-body section + section { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 12px; }
+.programming-body details, .programming-body fieldset { margin-block: 12px; }
+.programming-body pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 monospace; }
+.programming-body fieldset { min-width: 0; border: 1px solid var(--line); padding: 12px; }
+.programming-body input { max-width: 100%; }
+.program-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+@media print { .program-package-action { display: none; } }
