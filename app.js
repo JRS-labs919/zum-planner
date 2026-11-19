@@ -984,12 +984,19 @@ function openReport(reportId = "projectPackage") {
   const report = REPORTS.find(item => item.id === reportId) || REPORTS.at(-1);
   showModal(`
     ${modalHeader(report.name, `${state.project.name} · Generated from current local project data`)}
-    ${report.id === "projectPackage" ? '<div class="program-package-action"><button class="primary-button" type="button" id="open-programming">Custom programming</button></div>' : ""}
+    ${report.id === "projectPackage" ? '<div class="program-package-action"><button class="primary-button" type="button" id="open-programming">Custom programming</button> <button class="secondary-button" type="button" id="open-program-files">Program files</button></div>' : ""}
     <div class="modal-body report-preview" id="printable-report">${generateReport(report.id)}</div>
     <footer class="modal-footer">
       <button class="secondary-button" type="button" id="download-report">${svgButtonLabel("download", "Download HTML")}</button>
       <button class="primary-button" type="button" id="print-report">${svgButtonLabel("printer", "Print / Save PDF")}</button>
     </footer>`, true);
+  $("#open-program-files")?.addEventListener("click", () => {
+    showModal(`${modalHeader("Program file handoff",state.project.name)}
+      <div class="modal-body programming-body">${programmingFilesHTML()}</div>
+      <footer class="modal-footer"><button type="button" class="secondary-button" id="files-back">Back to package</button></footer>`,true);
+    bindProgrammingFiles();
+    $("#files-back").onclick = () => openReport("projectPackage");
+  });
   $("#open-programming")?.addEventListener("click", () => openProgramming());
   $("#print-report").addEventListener("click", () => window.print());
   $("#download-report").addEventListener("click", () => {

@@ -27,10 +27,14 @@ function programRevision() {
 }
 
 function programmingFilesHTML() {
-  return `<section><h3>Native SIMPL project and compiled files</h3>
-    <p>Attach the programmer’s editable project (.smw), project archive with dependencies (.zip), or compiled processor file (.lpz). Keep the originals for backup. Attachments stay in this browser and are downloaded separately from the project JSON.</p>
-    <label class="field">Attach program files<input id="attach-program" type="file" accept=".smw,.zip,.lpz" multiple></label>
-    <p role="status" id="program-file-status"></p><div id="program-file-list"></div></section>`;
+  const slot = (type, title, description, accept) => `<section><h4>${title}</h4><p>${description}</p>
+    <label class="field">Attach ${title.toLowerCase()}<input type="file" data-attach-program="${type}" accept="${accept}" multiple></label>
+    <div data-file-list="${type}"></div></section>`;
+  return `<section><h3>Program files</h3><p>Attach the originals supplied by the programmer. Files stay in this browser and download separately from the project JSON.</p>
+    <div id="program-file-list">
+    ${slot("source","Editable SIMPL project","For editing and rebuilding, attach the project archive (.zip) with its modules and dependencies, or an individual .smw source file.",".zip,.smw")}
+    ${slot("compiled","Compiled processor program","For loading the processor with Crestron Toolbox, attach the compiled .lpz from the same project revision.",".lpz")}
+    </div><p role="status" id="program-file-status"></p></section>`;
 }
 
 async function refreshProgramFiles() {
@@ -43,11 +47,15 @@ async function refreshProgramFiles() {
     req.onsuccess = () => {
       if (!list.isConnected || id !== state.project.id) return;
       const revision = programRevision();
-      list.innerHTML = req.result.length ? req.result.map(f => `<article class="soo-area">
+      for (const group of list.querySelectorAll("[data-file-list]")) {
+        const compiled = group.dataset.fileList === "compiled";
+        const files = req.result.filter(f => /\.lpz$/i.test(f.name) === compiled);
+        group.innerHTML = files.length ? files.map(f => `<article class="soo-area">
         <strong>${escapeHTML(f.name)}</strong><p>${escapeHTML(f.kind)} · ${Number(f.size).toLocaleString()} bytes · ${f.revision === revision ? "Design matches attachment time" : "Design changed · review file"}</p>
         ${/\.smw$/i.test(f.name) ? '<button class="secondary-button" type="button" data-program-view="'+escapeHTML(f.id)+'">View source file</button>' : ''}
-        <button class="secondary-button" type="button" data-program-download="${escapeHTML(f.id)}">Download original</button>
-        <button class="ghost-button" type="button" data-program-remove="${escapeHTML(f.id)}">Remove attachment</button><pre hidden class="attached-source"></pre></article>`).join("") : "<p>No native files attached to this project.</p>";
+        <button class="secondary-button" type="button" data-program-download="${escapeHTML(f.id)}">${compiled ? "Download compiled .lpz" : /\.zip$/i.test(f.name) ? "Download project archive" : "Download .smw source"}</button>
+        <button class="ghost-button" type="button" data-program-remove="${escapeHTML(f.id)}">Remove attachment</button><pre hidden class="attached-source"></pre></article>`).join("") : (compiled ? "<p>No compiled program attached.</p>" : "<p>No editable project attached.</p>");
+      }
     };
     req.onerror = () => { list.textContent = "Could not read attached files."; };
   } catch (error) { list.textContent = "File storage unavailable: " + error.message; }
@@ -64,13 +72,15 @@ function runFileTransaction(db, work) {
 }
 
 function bindProgrammingFiles() {
-  const input = $("#attach-program"), status = $("#program-file-status"), list = $("#program-file-list");
+  const status = $("#program-file-status"), list = $("#program-file-list");
   const project = state.project.id;
-  input.onchange = async () => {
+  for (const input of list.querySelectorAll("[data-attach-program]")) input.onchange = async () => {
     const files = Array.from(input.files);
     if (!files.length) return;
     try {
-      if (files.some(f => !/\.(smw|zip|lpz)$/i.test(f.name) || !f.size)) throw new Error("Choose a nonempty .smw, .zip, or .lpz file.");
+      const compiled = input.dataset.attachProgram === "compiled";
+      const allowed = compiled ? /\.lpz$/i : /\.(smw|zip)$/i;
+      if (files.some(f => !allowed.test(f.name) || !f.size)) throw new Error(compiled ? "Choose a nonempty .lpz file." : "Choose a nonempty .smw or .zip file.");
       // Persist any ID assigned when opening a project from an older release.
       saveState();
       const revision = programRevision();
