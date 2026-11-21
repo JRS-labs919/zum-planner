@@ -14,6 +14,16 @@ let takeoffDocumentOwner = null;
 let takeoffUploadToken = 0;
 let takeoffLabelPreview = null;
 
+// Plan wiring (takeoff-wiring.js holds the pure derivation and SVG builders).
+let takeoffWireDraft = null;
+let takeoffWireType = "";
+let planWiringVisible = true;
+let planWireCache = null;
+let planWireSelectedId = "";
+let planWirePointer = null;
+let planWiringPanelRendered = "";
+let planSheetSize = { width: 1000, height: 773 };
+
 function ensureTakeoffState() {
   state.takeoff ||= {};
   state.takeoff.document ||= null;
@@ -23,10 +33,13 @@ function ensureTakeoffState() {
   state.takeoff.catalog ||= [];
   state.takeoff.analysis ||= null;
   state.takeoff.lastSyncAt ||= null;
+  state.takeoff.recentCatalogIds ||= [];
 }
 
 window.renderPlanTakeoff = function renderPlanTakeoff() {
   ensureTakeoffState();
+  // Coming from another view: toolbox state and any wire draft start fresh.
+  if (!document.getElementById("takeoff-toolbox")) { resetToolboxUiState(); takeoffWireDraft = null; }
   const documentInfo = state.takeoff.document;
   const marks = state.takeoff.markups;
   const roomCount = marks.filter(mark => mark.type === "room").length;
@@ -98,6 +111,10 @@ function takeoffWorkspaceHTML(attached) {
   const pageMarks = state.takeoff.markups.filter(mark => Number(mark.page) === activePage);
   const preview = activeLabelPreview();
   const groups = groupedTakeoffCounts(activePage);
+  const stampsOnPage = pageMarks.filter(mark => mark.type === "stamp");
+  const markCount = pageMarks.filter(mark => mark.type !== "wire").length;
+  const wiringPanel = planWiringPanelHTML(derivedPlanWires(activePage, planSheetSize.width, planSheetSize.height), pageMarks);
+  planWiringPanelRendered = wiringPanel;
 
   return `<section class="takeoff-shell content-card">
     <div class="takeoff-toolbar">
@@ -117,27 +134,38 @@ function takeoffWorkspaceHTML(attached) {
           ${takeoffToolButton("room", "area", "Rectangle space")}
           ${takeoffToolButton("polyline", "link", "Polyline space")}
           ${takeoffToolButton("stamp", "plus", "Place component")}
+          ${takeoffToolButton("wire", typeof icons !== "undefined" && icons.wire ? "wire" : "link", "Draw wire")}
           ${takeoffToolButton("calibrate", "link", "Calibrate")}
           <button class="secondary-button" id="takeoff-find-tags" type="button" ${attached && pageMarks.some(mark => mark.type === "room") ? "" : "disabled"}>Find fixture tags in spaces</button>
+          <span class="takeoff-tools-end" role="group" aria-label="Wiring and undo">
+            <button class="tool-toggle ${planWiringVisible ? "active" : ""}" type="button" id="takeoff-show-wiring" aria-pressed="${planWiringVisible}" aria-label="Show wiring">${icon("layers")}<span>Show wiring</span></button>
+            <button class="secondary-button" id="takeoff-undo-mark" type="button" aria-keyshortcuts="Control+Z Meta+Z" title="${stampsOnPage.length ? "Undo last mark (Ctrl+Z)" : "No marks on this sheet"}" ${stampsOnPage.length ? "" : "disabled"}>Undo last mark</button>
+          </span>
         </div>
+        <div class="takeoff-mode-slot">
         ${takeoffMode === "polyline" ? `<div class="space-draft-tools" aria-label="Polyline controls"><span id="takeoff-point-count" aria-live="polite">${spaceDraftPoints().length} vertices</span><button type="button" class="secondary-button" id="takeoff-undo-point" ${spaceDraftPoints().length ? "" : "disabled"}>Undo point</button><button type="button" class="primary-button" id="takeoff-finish-space" ${spaceDraftPoints().length < 3 ? "disabled" : ""}>Finish space</button><button type="button" class="ghost-button" id="takeoff-cancel-space">Cancel</button></div>` : ""}
+        ${takeoffMode === "wire" ? takeoffWireDraftRowHTML(activePage) : ""}
+        ${takeoffMode === "wire" || takeoffMode === "polyline" ? "" : `<p class="takeoff-help" id="takeoff-help">${takeoffHelpText()}</p>`}
+        </div>
+        ${attached ? takeoffRecentStripHTML(takeoffActiveCatalogId) : ""}
         ${takeoffToolboxHTML(activeEntry)}
         <div class="plan-scroll" id="plan-scroll">
           ${attached ? `<div class="plan-stage" id="plan-stage"><canvas id="takeoff-pdf-canvas"></canvas><svg id="takeoff-overlay" aria-label="Plan markup overlay"></svg></div>` : `<div class="plan-reattach"><div>${icon("file")}</div><h3>Reattach ${escapeHTML(state.takeoff.document?.name || "the PDF")}</h3><p>For privacy and browser storage limits, the original PDF is not saved in localStorage.</p><button class="primary-button" id="takeoff-reattach" type="button">Choose source PDF</button></div>`}
         </div>
-        <p class="takeoff-help" id="takeoff-help">${takeoffHelpText()}</p>
+        ${takeoffMode === "wire" || takeoffMode === "polyline" ? `<p class="takeoff-help" id="takeoff-help">${takeoffHelpText()}</p>` : ""}
       </div>
       <aside class="takeoff-panel">
         <div class="panel-section">
           <div class="panel-section-header"><div><p class="kicker">Active mapping</p><h3>${activeEntry ? escapeHTML(activeEntry.tag || activeEntry.name) : "No mapping"}</h3></div><button class="row-action" id="takeoff-add-mapping" type="button" aria-label="Add mapping">${icon("plus")}</button></div>
-          ${catalog.length ? `<label class="compact-field">Catalog item<select id="takeoff-catalog">${catalog.map(entry => `<option value="${entry.id}" ${entry.id === takeoffActiveCatalogId ? "selected" : ""}>${escapeHTML(`${entry.tag ? `${entry.tag} · ` : ""}${entry.name}`)}</option>`).join("")}</select></label>` : `<p class="field-help">Scan the PDF or add a mapping before stamping.</p>`}
+          ${catalog.length ? "" : `<p class="field-help">Scan the PDF or add a mapping before stamping.</p>`}
           ${activeEntry ? `<div class="mapping-card"><span class="markup-chip ${escapeHTML(activeEntry.category)}">${escapeHTML(activeEntry.category)}</span><strong>${escapeHTML(activeEntry.name)}</strong><small>${escapeHTML(activeEntry.model || activeEntry.controlType || "Designer mapping pending")}</small>${mappingEvidenceHTML(activeEntry)}<button class="text-button" id="takeoff-edit-mapping" type="button">Edit mapping</button></div>` : ""}
         </div>
         ${preview ? labelPreviewHTML(preview) : ""}
         <div class="panel-section">
-          <p class="kicker">Sheet takeoff</p><h3>${pageMarks.length} mark${pageMarks.length === 1 ? "" : "s"} on this page</h3>
+          <p class="kicker">Sheet takeoff</p><h3>${markCount} mark${markCount === 1 ? "" : "s"} on this page</h3>
           <div class="takeoff-counts">${groups.length ? groups.map(group => `<button type="button" data-edit-catalog="${group.catalogId}"><span class="markup-chip ${escapeHTML(group.category)}">${escapeHTML(group.tag || group.category)}</span><strong>${group.quantity}</strong><small>${escapeHTML(group.name)}</small></button>`).join("") : '<p class="field-help">Stamped quantities will appear here.</p>'}</div>
         </div>
+        ${wiringPanel}
         <div class="panel-section">
           <p class="kicker">Source &amp; scale</p>
           <dl class="takeoff-source"><dt>File</dt><dd>${escapeHTML(state.takeoff.document?.name || "—")}</dd><dt>Page</dt><dd>${activePage}</dd><dt>Scale</dt><dd>${state.takeoff.scale ? `${Number(state.takeoff.scale.distanceFeet).toLocaleString()} ft calibration` : "Not calibrated"}</dd></dl>
@@ -153,18 +181,42 @@ function takeoffToolButton(mode, iconName, label) {
 }
 
 function takeoffHelpText() {
+  const active = state.takeoff.catalog.find(entry => entry.id === takeoffActiveCatalogId);
   const messages = {
-    select: "Select mode: click a mark to review or edit it.",
-    room: "Drag across opposite corners of the space, then enter its name.",
-    polyline: "Tap each corner in order. Choose Finish space to close the boundary.",
-    stamp: "Stamp symbol: choose a catalog mapping, then click each matching symbol on the plan.",
-    calibrate: "Calibrate: click two known points and enter their real-world distance."
+    select: "Select mode: click a mark or a drawn wire to review or edit it. Ctrl+Z undoes the last mark.",
+    room: "Drag across opposite corners of the space, then enter its name. Esc returns to Select.",
+    polyline: "Tap each corner in order. Choose Finish space to close the boundary. Ctrl+Z removes the last point. Esc cancels.",
+    stamp: active
+      ? `Placing ${toolboxStampLabel(active)} · ${active.model || active.tag || active.name}. Click each matching symbol on the plan. Ctrl+Z undoes the last mark. Esc stops placing.`
+      : "Stamp symbol: pick a product from Recent or the Component toolbox, then click each matching symbol on the plan. Esc returns to Select.",
+    wire: "Draw wire: click a device to start, click empty plan to add bends, click another device to finish. Ctrl+Z removes the last point. Esc cancels.",
+    calibrate: "Calibrate: click two known points and enter their real-world distance. Esc cancels."
   };
-  return messages[takeoffMode];
+  return escapeHTML(messages[takeoffMode]);
 }
 
 function bindTakeoffEvents() {
   bindTakeoffToolbox();
+  $("#takeoff-show-wiring")?.addEventListener("click", () => {
+    planWiringVisible = !planWiringVisible;
+    if (!planWiringVisible) takeoffWireDraft = null;
+    window.renderPlanTakeoff();
+  });
+  $("#takeoff-undo-mark")?.addEventListener("click", undoLastTakeoffMark);
+  $("#takeoff-wire-type")?.addEventListener("change", event => { takeoffWireType = event.target.value; refreshPlanWireDraft(); });
+  $("#takeoff-wire-undo-point")?.addEventListener("click", () => { const draft = wireDraft(); if (draft && draft.points.length > 1) draft.points.pop(); refreshPlanWireDraft(); });
+  $("#takeoff-wire-cancel")?.addEventListener("click", () => cancelPlanWireDraft());
+  document.querySelectorAll("[data-recent-catalog]").forEach(button => button.addEventListener("click", () => {
+    const id = button.dataset.recentCatalog;
+    cancelPlanWireDraft();
+    takeoffActiveCatalogId = id;
+    takeoffLabelPreview = null;
+    takeoffCalibrationPoint = null;
+    takeoffRoomDrag = takeoffPolylineDraft = null;
+    takeoffMode = "stamp";
+    window.renderPlanTakeoff();
+    document.querySelector(`[data-recent-catalog="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+  }));
   $("#takeoff-undo-point")?.addEventListener("click", () => { spaceDraftPoints().pop(); refreshSpaceDraft(); });
   $("#takeoff-finish-space")?.addEventListener("click", finishSpaceDraft);
   $("#takeoff-cancel-space")?.addEventListener("click", () => {
@@ -190,7 +242,7 @@ function bindTakeoffEvents() {
   }));
   $("#takeoff-sync")?.addEventListener("click", populateDesignerFromTakeoff);
   $("#takeoff-page")?.addEventListener("change", event => {
-    takeoffRoomDrag = takeoffPolylineDraft = null;
+    takeoffRoomDrag = takeoffPolylineDraft = takeoffWireDraft = null;
     takeoffLabelPreview = null;
     state.takeoff.activePage = Number(event.target.value);
     saveState("Sheet changed");
@@ -199,9 +251,10 @@ function bindTakeoffEvents() {
   $("#takeoff-zoom-in")?.addEventListener("click", () => { takeoffZoom = Math.min(3, takeoffZoom + 0.25); window.renderPlanTakeoff(); });
   $("#takeoff-zoom-out")?.addEventListener("click", () => { takeoffZoom = Math.max(0.5, takeoffZoom - 0.25); window.renderPlanTakeoff(); });
   document.querySelectorAll("[data-takeoff-mode]").forEach(button => button.addEventListener("click", () => {
-    if (takeoffMode !== button.dataset.takeoffMode) takeoffRoomDrag = takeoffPolylineDraft = null;
+    if (takeoffMode !== button.dataset.takeoffMode) takeoffRoomDrag = takeoffPolylineDraft = takeoffWireDraft = null;
     takeoffLabelPreview = null;
     takeoffMode = button.dataset.takeoffMode;
+    if (takeoffMode === "wire") planWiringVisible = true;
     takeoffCalibrationPoint = null;
     window.renderPlanTakeoff();
     if (takeoffMode === "stamp") {
@@ -209,12 +262,13 @@ function bindTakeoffEvents() {
       document.getElementById("takeoff-toolbox-search").focus();
     }
   }));
-  $("#takeoff-catalog")?.addEventListener("change", event => { takeoffActiveCatalogId = event.target.value; window.renderPlanTakeoff(); });
   $("#takeoff-add-mapping")?.addEventListener("click", () => openTakeoffCatalogEditor());
   $("#takeoff-edit-mapping")?.addEventListener("click", () => openTakeoffCatalogEditor(takeoffActiveCatalogId));
   $("#takeoff-review-marks")?.addEventListener("click", openTakeoffMarkupReview);
   document.querySelectorAll("[data-edit-catalog]").forEach(button => button.addEventListener("click", () => {
     takeoffActiveCatalogId = button.dataset.editCatalog;
+    touchRecentCatalog(takeoffActiveCatalogId);
+    saveState("Component selected");
     openTakeoffCatalogEditor(takeoffActiveCatalogId);
   }));
 }
@@ -460,11 +514,62 @@ function acceptRoomFixtureLabels() {
 function renderTakeoffOverlay(width, height) {
   const overlay = $("#takeoff-overlay");
   if (!overlay) return;
-  const marks = state.takeoff.markups.filter(mark => Number(mark.page) === Number(state.takeoff.activePage));
+  planSheetSize = { width, height };
+  overlay.dataset.mode = takeoffMode;
+  const page = Number(state.takeoff.activePage);
+  const marks = state.takeoff.markups.filter(mark => Number(mark.page) === page);
   const proposals = activeLabelPreview()?.candidates || [];
-  const calibration = state.takeoff.scale?.page === Number(state.takeoff.activePage) ? state.takeoff.scale : null;
-  overlay.innerHTML = `${calibration ? `<line class="calibration-line" x1="${calibration.x1 * width}" y1="${calibration.y1 * height}" x2="${calibration.x2 * width}" y2="${calibration.y2 * height}"/><text class="calibration-label" x="${((calibration.x1 + calibration.x2) / 2) * width}" y="${((calibration.y1 + calibration.y2) / 2) * height - 8}">${escapeHTML(`${calibration.distanceFeet} ft`)}</text>` : ""}${marks.map(mark => markupSVG(mark, width, height)).join("")}${proposals.map((p, i) => `<g id="takeoff-preview-${i}" transform="translate(${p.x * width} ${p.y * height})" opacity="${p.selected ? 1 : 0.25}" pointer-events="none"><circle r="10" fill="#fff4cc" stroke="#764900" stroke-dasharray="2 2"/><text text-anchor="middle" y="4" fill="#322100" font-size="10">${i + 1}</text></g>`).join("")}`;
+  const calibration = state.takeoff.scale?.page === page ? state.takeoff.scale : null;
+  const derived = derivedPlanWires(page, width, height);
+  const wiring = planWiresSVG({ derived: derived.wires, drawn: marks.filter(mark => mark.type === "wire"), markups: marks, catalog: state.takeoff.catalog, width, height,
+    scale: state.takeoff.scale, page, visible: planWiringVisible, selectedId: planWireSelectedId });
+  // Layer order, bottom to top: spaces, derived and drawn wires, calibration, stamps, proposals, drafts.
+  overlay.innerHTML = `${marks.filter(mark => mark.type === "room").map(mark => markupSVG(mark, width, height)).join("")}${wiring}${calibration ? `<line class="calibration-line" x1="${calibration.x1 * width}" y1="${calibration.y1 * height}" x2="${calibration.x2 * width}" y2="${calibration.y2 * height}"/><text class="calibration-label" x="${((calibration.x1 + calibration.x2) / 2) * width}" y="${((calibration.y1 + calibration.y2) / 2) * height - 8}">${escapeHTML(`${calibration.distanceFeet} ft`)}</text>` : ""}${marks.filter(mark => mark.type === "stamp").map(mark => markupSVG(mark, width, height)).join("")}${proposals.map((p, i) => `<g id="takeoff-preview-${i}" transform="translate(${p.x * width} ${p.y * height})" opacity="${p.selected ? 1 : 0.25}" pointer-events="none"><circle r="10" fill="#fff4cc" stroke="#764900" stroke-dasharray="2 2"/><text text-anchor="middle" y="4" fill="#322100" font-size="10">${i + 1}</text></g>`).join("")}`;
   paintSpaceDraft(overlay, width, height);
+  overlay.insertAdjacentHTML("beforeend", '<g id="plan-wire-draft" pointer-events="none"></g>');
+  paintWireDraft();
+  const panel = $("#plan-wiring-panel");
+  const panelHTML = planWiringPanelHTML(derived, marks);
+  if (panel && panelHTML !== planWiringPanelRendered) { panel.outerHTML = panelHTML; planWiringPanelRendered = panelHTML; }
+}
+
+// Derived wires are not stored; this memo keeps the per-pointermove overlay redraw cheap.
+function derivedPlanWires(page, width, height) {
+  const marks = state.takeoff.markups.filter(mark => Number(mark.page) === Number(page) && (mark.type === "room" || mark.type === "stamp"));
+  const key = JSON.stringify([page, width, height, marks.map(mark => [mark.id, mark.type, mark.x, mark.y, mark.w, mark.h, mark.points, mark.catalogId, mark.createdAt, mark.name]),
+    state.takeoff.catalog.map(entry => [entry.id, entry.model, entry.category, entry.controlType, entry.tag, entry.name, entry.stampCode])]);
+  if (planWireCache?.key === key) return planWireCache.result;
+  const result = derivePlanWires({ markups: state.takeoff.markups, catalog: state.takeoff.catalog, page, width, height });
+  planWireCache = { key, result };
+  return result;
+}
+
+function planWiringPanelHTML(derived, pageMarks) {
+  const drawn = pageMarks.filter(mark => mark.type === "wire");
+  const counts = new Map();
+  const bump = (type, key) => counts.set(type, { derived: 0, drawn: 0, ...counts.get(type), [key]: (counts.get(type)?.[key] || 0) + 1 });
+  derived.wires.forEach(wire => bump(wire.linkType, "derived"));
+  drawn.forEach(wire => bump(wire.linkType, "drawn"));
+  const total = derived.wires.length + drawn.length;
+  const types = [...PLAN_WIRE_ORDER.filter(type => counts.has(type)), ...[...counts.keys()].filter(type => !PLAN_WIRE_ORDER.includes(type))];
+  const rows = types.map(type => {
+    const row = counts.get(type);
+    const parts = [row.derived && `${row.derived} derived`, row.drawn && `${row.drawn} drawn`].filter(Boolean).join(" · ");
+    return `<div class="wire-legend-row"><svg width="28" height="10" viewBox="0 0 28 10" aria-hidden="true"><path d="M1 5H27" class="${escapeHTML(PLAN_WIRE_CLASS[type] || "wire-control")}"/></svg><strong>${escapeHTML(type)}</strong><small>${parts}</small></div>`;
+  }).join("");
+  const warning = text => `<div class="design-rule warning">${icon("alert")}<span>${escapeHTML(text)}</span></div>`;
+  const texts = derived.messages.map(message => message.text);
+  const messages = texts.slice(0, 4).map(warning).join("") + (texts.length > 4 ? `<details><summary>Show all ${texts.length} messages</summary>${texts.slice(4).map(warning).join("")}</details>` : "");
+  let empty = "";
+  if (!total && !texts.length) {
+    if (!pageMarks.some(mark => mark.type === "stamp")) empty = "Wires appear automatically as you place controllers and devices inside spaces.";
+    else if (!pageMarks.some(mark => mark.type === "room")) empty = "Draw space boundaries so in-room wiring can be derived.";
+  }
+  return `<div class="panel-section" id="plan-wiring-panel">
+    <div class="panel-section-header"><div><p class="kicker">PLAN WIRING</p><h3>${total ? `${total} wire${total === 1 ? "" : "s"}` : "No wires"} on this sheet</h3></div>${planWiringVisible ? "" : '<span class="pill gray">Hidden on plan</span>'}</div>
+    ${rows}${messages}${empty ? `<p class="field-help">${escapeHTML(empty)}</p>` : ""}
+    <p class="field-help">Derived wires update automatically. Drawn wires have end dots.</p>
+  </div>`;
 }
 
 function spaceDraftPoints() {
@@ -566,6 +671,7 @@ function markupSVG(mark, width, height) {
     }
     return `<g class="takeoff-mark room-mark" data-markup-id="${mark.id}"><rect x="${mark.x * width}" y="${mark.y * height}" width="${mark.w * width}" height="${mark.h * height}"/><text x="${mark.x * width + 8}" y="${mark.y * height + 18}">${escapeHTML(mark.name)}</text></g>`;
   }
+  if (mark.type !== "stamp") return "";
   const entry = state.takeoff.catalog.find(item => item.id === mark.catalogId) || {};
   const x = mark.x * width;
   const y = mark.y * height;
@@ -579,6 +685,7 @@ function bindOverlayEvents() {
   overlay.addEventListener("pointerdown", handleOverlayPointerDown);
   overlay.addEventListener("pointermove", handleOverlayPointerMove);
   overlay.addEventListener("pointerup", handleOverlayPointerUp);
+  overlay.addEventListener("pointerleave", () => { planWirePointer = null; paintWireDraft(); });
   overlay.addEventListener("pointercancel", () => { takeoffRoomDrag = null; refreshSpaceDraft(); });
 }
 
@@ -597,6 +704,12 @@ function handleOverlayPointerDown(event) {
 }
 
 function handleOverlayPointerMove(event) {
+  if (takeoffMode === "wire") {
+    // Only the draft group repaints: rubber band and hover ring.
+    planWirePointer = normalizedOverlayPoint(event);
+    paintWireDraft();
+    return;
+  }
   if (takeoffMode !== "room" || !takeoffRoomDrag) return;
   const point = normalizedOverlayPoint(event);
   const x = Math.min(point.x, takeoffRoomDrag.start.x);
@@ -610,12 +723,21 @@ function handleOverlayPointerMove(event) {
 function handleOverlayPointerUp(event) {
   if (!event.isPrimary || event.button !== 0) return;
   if (activeLabelPreview()) return;
+  const clickedWire = event.target.closest?.("[data-wire-id]");
+  if (takeoffMode === "select" && clickedWire?.classList.contains("drawn")) {
+    openPlanWireEditor(clickedWire.dataset.wireId);
+    return;
+  }
   const clickedMark = event.target.closest?.("[data-markup-id]");
   if (takeoffMode === "select" && clickedMark) {
     openTakeoffMarkupEditor(clickedMark.dataset.markupId);
     return;
   }
   const point = normalizedOverlayPoint(event);
+  if (takeoffMode === "wire") {
+    handlePlanWireClick(point, event.currentTarget);
+    return;
+  }
   if (takeoffMode === "polyline") {
     const points = spaceDraftPoints();
     const last = points.at(-1);
@@ -626,8 +748,11 @@ function handleOverlayPointerUp(event) {
   if (takeoffMode === "stamp") {
     if (!takeoffActiveCatalogId) { showToast("Add or select a catalog mapping first"); return; }
     state.takeoff.markups.push({ id: newRecordId(), type: "stamp", page: Number(state.takeoff.activePage), x: point.x, y: point.y, catalogId: takeoffActiveCatalogId, quantity: 1, createdAt: new Date().toISOString() });
+    if (!state.takeoff.recentCatalogIds.includes(takeoffActiveCatalogId)) touchRecentCatalog(takeoffActiveCatalogId);
     saveState("Symbol counted");
     window.renderPlanTakeoff();
+    const count = state.takeoff.markups.filter(mark => Number(mark.page) === Number(state.takeoff.activePage) && mark.type !== "wire").length;
+    takeoffAnnounce(`${count} marks on this page`);
     return;
   }
   if (takeoffMode === "room" && takeoffRoomDrag) {
@@ -725,6 +850,7 @@ function openTakeoffMarkupEditor(markupId) {
   const markup = state.takeoff.markups.find(mark => mark.id === markupId);
   if (!markup) return;
   if (markup.type === "room") { openTakeoffRoomEditor(null, markup); return; }
+  if (markup.type === "wire") { openPlanWireEditor(markup.id); return; }
   const entry = state.takeoff.catalog.find(item => item.id === markup.catalogId);
   showModal(`
     ${modalHeader("Review plan mark", `${entry?.tag || "Symbol"} · page ${markup.page} · ${findAreaForMarkup(markup)}`)}
@@ -737,11 +863,20 @@ function openTakeoffMarkupEditor(markupId) {
     takeoffLabelPreview = null;
     event.preventDefault(); Object.assign(markup, Object.fromEntries(new FormData(event.currentTarget).entries())); saveState("Mark updated"); closeModal(); window.renderPlanTakeoff();
   });
-  $("#delete-takeoff-mark").addEventListener("click", () => { takeoffLabelPreview = null; state.takeoff.markups = state.takeoff.markups.filter(mark => mark.id !== markup.id); saveState("Mark deleted"); closeModal(); window.renderPlanTakeoff(); });
+  $("#delete-takeoff-mark").addEventListener("click", () => {
+    takeoffLabelPreview = null;
+    if (planWiresAttachedTo(markup.id).length) { confirmDeleteStampWithWires(markup.id); return; }
+    state.takeoff.markups = state.takeoff.markups.filter(mark => mark.id !== markup.id);
+    saveState("Mark deleted"); closeModal(); window.renderPlanTakeoff();
+  });
 }
 
 function openTakeoffMarkupReview() {
   const rows = state.takeoff.markups.map(mark => {
+    if (mark.type === "wire") {
+      const [from, to] = [mark.fromMarkupId, mark.toMarkupId].map(id => planWireEndInfo(id)?.label || "?");
+      return `<tr><td>${escapeHTML(`${mark.linkType}: ${from} to ${to}`)}</td><td>Wire</td><td>${mark.page}</td><td>—</td><td>—</td><td><button class="row-action" type="button" data-review-mark="${mark.id}">${icon("edit")}</button></td></tr>`;
+    }
     const entry = state.takeoff.catalog.find(item => item.id === mark.catalogId);
     return `<tr><td>${escapeHTML(mark.type === "room" ? mark.name : entry?.tag || "?")}</td><td>${escapeHTML(mark.type === "room" ? "Space" : entry?.category || "Symbol")}</td><td>${mark.page}</td><td>${escapeHTML(mark.type === "room" ? mark.roomType : findAreaForMarkup(mark))}</td><td>${mark.type === "stamp" ? Number(mark.quantity || 1) : "—"}</td><td><button class="row-action" type="button" data-review-mark="${mark.id}">${icon("edit")}</button></td></tr>`;
   }).join("");
@@ -751,10 +886,14 @@ function openTakeoffMarkupReview() {
 }
 
 function confirmClearTakeoff() {
-  showModal(`${modalHeader("Clear the plan takeoff?", "This removes the attached-document metadata, mappings, markups, and records generated from them.")}<div class="modal-body"><p>Manually entered designer records will be preserved. Export the project first if you need a backup.</p></div><footer class="modal-footer"><button class="ghost-button" type="button" data-modal-close>Cancel</button><button class="danger-button" type="button" id="confirm-clear-takeoff">Clear takeoff</button></footer>`);
+  showModal(`${modalHeader("Clear the plan takeoff?", "This removes the attached-document metadata, mappings, markups (including drawn wires), and records generated from them.")}<div class="modal-body"><p>Manually entered designer records will be preserved. Export the project first if you need a backup.</p></div><footer class="modal-footer"><button class="ghost-button" type="button" data-modal-close>Cancel</button><button class="danger-button" type="button" id="confirm-clear-takeoff">Clear takeoff</button></footer>`);
   $("#confirm-clear-takeoff").addEventListener("click", () => {
     Object.keys(state.records).forEach(stageId => { state.records[stageId] = recordsFor(stageId).filter(record => record.generatedBy !== "plan-takeoff" || record.updatedAt); });
-    state.takeoff = { document: null, activePage: 1, scale: null, markups: [], catalog: [], analysis: null, lastSyncAt: null };
+    state.takeoff = { document: null, activePage: 1, scale: null, markups: [], catalog: [], analysis: null, lastSyncAt: null, recentCatalogIds: [] };
+    resetToolboxUiState();
+    takeoffWireDraft = null;
+    planWireCache = null;
+    planWireSelectedId = "";
     pruneTakeoffSpaces();
     syncConfiguredSpaces();
     takeoffPdf = null;
@@ -848,6 +987,11 @@ function populateDesignerFromTakeoff() {
     ...baseGeneratedRecord({quantity: 1, markups: [room]}), area: room.name, spaceId: room.spaceId, roomType: room.roomType || "",
     notes: "Confirm the sequence of operations against the project drawings."
   }]));
+  // Manual wires become one Wiring & Links record each; derived wires never do.
+  state.takeoff.markups.filter(mark => mark.type === "wire").forEach(wire => incoming.push(["links", {
+    ...baseGeneratedRecord({ quantity: 1, markups: [wire] }),
+    ...planWireLinkRecord(wire, { markups: state.takeoff.markups, catalog: state.takeoff.catalog, scale: state.takeoff.scale, areaOf: findAreaForMarkup })
+  }]));
   const retained = new Set();
   const skippedIds = new Set(stamps.filter(mark => !state.takeoff.catalog.find(entry => entry.id === mark.catalogId)?.verifiedMapping).map(mark => mark.id));
   for (const [stage, record] of incoming) {
@@ -908,6 +1052,245 @@ function designerRecordFromTakeoff(group) {
     return ["lineItems", { ...record, category: "Accessory", unitPrice: "" }];
   }
   return ["roomDevices", { ...record, deviceType: entry.deviceType || ({keypad:"Keypad",interface:"Integration interface"})[entry.category] || sourceProduct?.name || entry.category, connection, function: sourceProduct?.role || "" }];
+}
+
+// ---- Placement helpers: live region, undo, keyboard ----
+
+function takeoffAnnounce(text) {
+  let region = document.getElementById("takeoff-announce");
+  if (!region) {
+    region = document.createElement("div");
+    region.id = "takeoff-announce";
+    region.className = "visually-hidden";
+    region.setAttribute("aria-live", "polite");
+    document.body.append(region);
+  }
+  // Alternate a trailing space so a repeated message is announced again.
+  region.textContent = region.textContent === text ? `${text} ` : text;
+}
+
+function planWireEndInfo(markupId) {
+  const mark = state.takeoff.markups.find(item => item.id === markupId && item.type === "stamp");
+  return mark ? planWireStampInfo(mark, state.takeoff.catalog) : null;
+}
+
+function planWiresAttachedTo(stampId) {
+  return state.takeoff.markups.filter(mark => mark.type === "wire" && (mark.fromMarkupId === stampId || mark.toMarkupId === stampId));
+}
+
+function planWireDescribe(wire) {
+  const [from, to] = [wire.fromMarkupId, wire.toMarkupId].map(id => planWireEndInfo(id)?.label || "?");
+  return `${wire.linkType}: ${from} to ${to}`;
+}
+
+// Removes a stamp and the manual wires attached to it.
+function removeTakeoffStamp(stampId) {
+  const stamp = state.takeoff.markups.find(mark => mark.id === stampId);
+  if (!stamp) return;
+  const info = planWireStampInfo(stamp, state.takeoff.catalog);
+  const wires = planWiresAttachedTo(stampId);
+  const ids = new Set([stampId, ...wires.map(wire => wire.id)]);
+  state.takeoff.markups = state.takeoff.markups.filter(mark => !ids.has(mark.id));
+  if (takeoffWireDraft?.fromId === stampId) takeoffWireDraft = null;
+  takeoffLabelPreview = null;
+  saveState("Mark deleted");
+  window.renderPlanTakeoff();
+  const text = `Removed ${info.label} · ${info.model || info.name}${wires.length ? ` and ${wires.length} wire${wires.length === 1 ? "" : "s"}` : ""}`;
+  showToast(text);
+  takeoffAnnounce(text);
+}
+
+function confirmDeleteStampWithWires(stampId) {
+  const stamp = state.takeoff.markups.find(mark => mark.id === stampId);
+  if (!stamp) return;
+  const info = planWireStampInfo(stamp, state.takeoff.catalog);
+  const wires = planWiresAttachedTo(stampId);
+  showModal(`${modalHeader(`Delete ${info.label} and ${wires.length} attached wire${wires.length === 1 ? "" : "s"}?`, "These wires connect to this mark and are deleted with it.")}<div class="modal-body"><ul>${wires.map(wire => `<li>${escapeHTML(planWireDescribe(wire))}</li>`).join("")}</ul></div><footer class="modal-footer"><button class="secondary-button" type="button" id="cancel-delete-stamp" data-modal-close>Cancel</button><button class="danger-button" type="button" id="confirm-delete-stamp">Delete mark and wires</button></footer>`);
+  window.setTimeout(() => $("#cancel-delete-stamp")?.focus(), 40);
+  $("#confirm-delete-stamp").addEventListener("click", () => { closeModal(); removeTakeoffStamp(stampId); });
+}
+
+// Newest stamp on this sheet by createdAt (array order breaks ties).
+function undoLastTakeoffMark() {
+  const page = Number(state.takeoff.activePage);
+  let newest = null;
+  for (const mark of state.takeoff.markups) {
+    if (mark.type === "stamp" && Number(mark.page) === page && (!newest || (mark.createdAt || "") >= (newest.createdAt || ""))) newest = mark;
+  }
+  if (!newest) { showToast("Nothing to undo on this sheet"); return; }
+  if (planWiresAttachedTo(newest.id).length) { confirmDeleteStampWithWires(newest.id); return; }
+  removeTakeoffStamp(newest.id);
+}
+
+// One capture-phase listener, registered once. It runs before app.js's bubble
+// Esc-closes-modal handler, and ignores keys while a modal is open.
+function handleTakeoffKeydown(event) {
+  if (state.currentView !== "takeoff" || !modalBackdrop.classList.contains("hidden")) return;
+  const typing = element => element?.closest?.("input, select, textarea") || element?.isContentEditable;
+  // Esc leaves stamp mode even from the toolbox search box (focus lands there on entry); Ctrl+Z stays with the field.
+  const inToolboxSearch = event.key === "Escape" && takeoffMode === "stamp" && event.target?.id === "takeoff-toolbox-search";
+  if (!inToolboxSearch && (typing(event.target) || typing(document.activeElement))) return;
+  if (event.key === "Escape") {
+    const hadDraft = Boolean(wireDraft()?.points.length || takeoffPolylineDraft?.points?.length || takeoffCalibrationPoint || takeoffRoomDrag);
+    if (!hadDraft && takeoffMode === "select") return;
+    cancelPlanWireDraft();
+    takeoffPolylineDraft = null;
+    takeoffCalibrationPoint = null;
+    takeoffRoomDrag = null;
+    takeoffMode = "select";
+    event.preventDefault();
+    window.renderPlanTakeoff();
+    return;
+  }
+  if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "z") {
+    if (takeoffMode === "wire" && wireDraft()?.points.length) {
+      const draft = wireDraft();
+      if (draft.points.length > 1) draft.points.pop();
+      refreshPlanWireDraft();
+    } else if (takeoffMode === "polyline" && spaceDraftPoints().length) {
+      spaceDraftPoints().pop();
+      refreshSpaceDraft();
+    } else undoLastTakeoffMark();
+    event.preventDefault();
+  }
+}
+document.addEventListener("keydown", handleTakeoffKeydown, true);
+
+// ---- Draw wire ----
+
+function currentWireType() {
+  return PLAN_WIRE_TYPES.includes(takeoffWireType) ? takeoffWireType : PLAN_WIRE_TYPES[0];
+}
+
+function wireDraft() {
+  return takeoffWireDraft && takeoffWireDraft.owner === state.takeoff && takeoffWireDraft.page === Number(state.takeoff.activePage) ? takeoffWireDraft : null;
+}
+
+function planSheetAspect() {
+  return planSheetSize.height / planSheetSize.width;
+}
+
+function planWireDraftInfo(page = Number(state.takeoff.activePage)) {
+  const draft = wireDraft();
+  if (!draft?.points.length) {
+    const any = state.takeoff.markups.some(mark => mark.type === "stamp" && Number(mark.page) === page);
+    return { status: any ? "Click a device to start" : "Place devices on the plan first", length: "", canUndo: false };
+  }
+  const count = draft.points.length;
+  const feet = planWireLengthFeet(draft.points, state.takeoff.scale, page, planSheetAspect());
+  return { status: `From ${planWireEndInfo(draft.fromId)?.label || "?"} · ${count} point${count === 1 ? "" : "s"}`, length: `Length so far: ${planWireLengthText(feet)}`, canUndo: count > 1 };
+}
+
+function takeoffWireDraftRowHTML(page) {
+  const info = planWireDraftInfo(page);
+  return `<div class="space-draft-tools wire-draft-tools" aria-label="Wire controls"><label class="compact-field">Wire type<select id="takeoff-wire-type">${PLAN_WIRE_TYPES.map(type => `<option value="${escapeHTML(type)}" ${type === currentWireType() ? "selected" : ""}>${escapeHTML(type)}</option>`).join("")}</select></label><span id="takeoff-wire-status" aria-live="polite">${escapeHTML(info.status)}</span><span id="takeoff-wire-length" ${info.length ? "" : "hidden"}>${escapeHTML(info.length)}</span><button type="button" class="secondary-button" id="takeoff-wire-undo-point" ${info.canUndo ? "" : "disabled"}>Undo point</button><button type="button" class="ghost-button" id="takeoff-wire-cancel">Cancel</button></div>`;
+}
+
+// Repaints only #plan-wire-draft: committed segments, rubber band, rings.
+function paintWireDraft() {
+  const group = $("#plan-wire-draft");
+  const overlay = $("#takeoff-overlay");
+  if (!group || !overlay) return;
+  if (takeoffMode !== "wire" || !planWiringVisible) { group.innerHTML = ""; return; }
+  const width = overlay.viewBox.baseVal.width, height = overlay.viewBox.baseVal.height;
+  const draft = wireDraft();
+  const hover = planWirePointer ? planWireHitStamp(state.takeoff.markups, state.takeoff.activePage, planWirePointer, width, height) : null;
+  group.innerHTML = planWireDraftSVG(draft && { points: draft.points, fromId: draft.fromId, linkType: currentWireType() }, draft ? planWirePointer : null, hover, width, height);
+}
+
+function refreshPlanWireDraft() {
+  paintWireDraft();
+  if (takeoffMode !== "wire") return;
+  const info = planWireDraftInfo();
+  const status = $("#takeoff-wire-status"), length = $("#takeoff-wire-length"), undo = $("#takeoff-wire-undo-point");
+  if (status) status.textContent = info.status;
+  if (length) { length.textContent = info.length; length.hidden = !info.length; }
+  if (undo) undo.disabled = !info.canUndo;
+}
+
+function cancelPlanWireDraft(silent = false) {
+  const hadClick = Boolean(wireDraft()?.points.length);
+  takeoffWireDraft = null;
+  if (hadClick && !silent) showToast("Wire draft cancelled");
+  refreshPlanWireDraft();
+}
+
+function handlePlanWireClick(point, overlay) {
+  const width = overlay.viewBox.baseVal.width, height = overlay.viewBox.baseVal.height;
+  const page = Number(state.takeoff.activePage);
+  const hit = planWireHitStamp(state.takeoff.markups, page, point, width, height);
+  const draft = wireDraft();
+  if (!draft?.points.length) {
+    if (!hit) { showToast("Start the wire on a device stamp"); return; }
+    takeoffWireDraft = { owner: state.takeoff, page, fromId: hit.id, points: [{ x: hit.x, y: hit.y }], aspect: height / width };
+    if (planWiringVisible) refreshPlanWireDraft();
+    else { planWiringVisible = true; window.renderPlanTakeoff(); }
+    return;
+  }
+  if (hit) {
+    if (hit.id === draft.fromId) { showToast("Choose a different device to end the wire"); return; }
+    draft.points.push({ x: hit.x, y: hit.y });
+    savePlanWireDraft(hit, height / width);
+    return;
+  }
+  const last = draft.points.at(-1);
+  if (Math.hypot(point.x - last.x, point.y - last.y) > 0.0005) draft.points.push(point);
+  refreshPlanWireDraft();
+}
+
+function savePlanWireDraft(endStamp, aspect) {
+  const draft = wireDraft();
+  if (!draft) return;
+  const wire = { id: newRecordId(), type: "wire", page: draft.page, linkType: currentWireType(), points: draft.points.map(point => ({ x: point.x, y: point.y })),
+    fromMarkupId: draft.fromId, toMarkupId: endStamp.id, sheetAspect: aspect, createdAt: new Date().toISOString() };
+  state.takeoff.markups.push(wire);
+  takeoffWireDraft = null;
+  saveState("Wire saved");
+  window.renderPlanTakeoff();
+  showToast(`${wire.linkType} wire saved · ${planWireEndInfo(wire.fromMarkupId)?.label || "?"} to ${planWireEndInfo(wire.toMarkupId)?.label || "?"}`);
+  takeoffAnnounce("Wire saved");
+}
+
+function openPlanWireEditor(wireId) {
+  const wire = state.takeoff.markups.find(mark => mark.id === wireId && mark.type === "wire");
+  if (!wire) return;
+  const { points, missing } = planWireResolvedPoints(wire, state.takeoff.markups);
+  const [from, to] = [wire.fromMarkupId, wire.toMarkupId].map(id => planWireEndInfo(id));
+  const end = info => info ? `${info.label} · ${info.model || info.name}` : "?";
+  const feet = planWireLengthFeet(points, state.takeoff.scale, wire.page, wire.sheetAspect || planSheetAspect());
+  planWireSelectedId = wire.id;
+  const overlay = $("#takeoff-overlay");
+  if (overlay) renderTakeoffOverlay(overlay.viewBox.baseVal.width, overlay.viewBox.baseVal.height);
+  // The halo stays while the modal is open; app.js owns closeModal, so watch the backdrop.
+  const watcher = new MutationObserver(() => {
+    if (!modalBackdrop.classList.contains("hidden")) return;
+    watcher.disconnect();
+    planWireSelectedId = "";
+    const current = $("#takeoff-overlay");
+    if (current) renderTakeoffOverlay(current.viewBox.baseVal.width, current.viewBox.baseVal.height);
+  });
+  watcher.observe(modalBackdrop, { attributes: true, attributeFilter: ["class"] });
+  showModal(`
+    ${modalHeader("Edit wire", `${end(from)} to ${end(to)} · page ${wire.page}`)}
+    <form id="takeoff-wire-form"><div class="modal-body"><div class="form-grid">
+      ${fieldHTML({ key: "linkType", label: "Wire type", type: "select", required: true, options: PLAN_WIRE_TYPES }, wire.linkType)}
+    </div>
+    <dl class="takeoff-source"><dt>Length</dt><dd>${escapeHTML(planWireLengthText(feet))}</dd><dt>Points</dt><dd>${points.length} points</dd></dl>
+    <p class="field-help">${feet == null ? "Calibrate this sheet to see a length." : "Length follows the sheet calibration, rounded up to a whole foot."}</p>
+    ${missing ? `<div class="design-rule warning">${icon("alert")}<span>Endpoint missing: a device on this wire was deleted. The wire follows its stored points. Delete it or draw a new one.</span></div>` : ""}
+    </div><footer class="modal-footer"><button class="danger-button" type="button" id="delete-plan-wire">${svgButtonLabel("trash", "Delete wire")}</button><button class="secondary-button" type="button" data-modal-close>Cancel</button><button class="primary-button" type="submit">Save</button></footer></form>`);
+  $("#takeoff-wire-form").addEventListener("submit", event => {
+    event.preventDefault();
+    const linkType = new FormData(event.currentTarget).get("linkType");
+    if (!linkType) return;
+    wire.linkType = linkType;
+    saveState("Wire updated"); closeModal(); window.renderPlanTakeoff();
+  });
+  $("#delete-plan-wire").addEventListener("click", () => {
+    state.takeoff.markups = state.takeoff.markups.filter(mark => mark.id !== wire.id);
+    saveState("Wire deleted"); closeModal(); window.renderPlanTakeoff();
+    showToast("Wire deleted");
+  });
 }
 
 ensureTakeoffState();

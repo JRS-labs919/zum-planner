@@ -1,0 +1,99 @@
+/* Takeoff placement and plan wiring. Loaded after styles.css; later file wins at equal specificity. */
+
+/* Persistent live region (takeoff.js appends it to <body>). */
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* Toolbar: right-hand group */
+.takeoff-tools-end { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+
+/* Recent products strip: one row, constant height at 0, 1 or 8 chips; overflow scrolls sideways so the sheet never moves. */
+.recent-strip { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; height: 58px; box-sizing: border-box; padding: 6px 12px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; border-bottom: 1px solid var(--line); background: var(--paper); }
+.recent-strip > * { flex: 0 0 auto; }
+.recent-strip-label { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.recent-strip .field-help { margin: 0; white-space: nowrap; }
+.recent-chip { min-height: 36px; max-width: 220px; }
+/* styles.css hides .tool-toggle span under 860 px; the chip text is the label, so keep it. */
+.recent-strip .recent-chip span { display: inline; }
+.recent-strip .recent-chip .markup-chip { display: inline-flex; }
+.recent-chip-text { max-width: 128px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Mode row slot: always reserved (constant height per breakpoint) so entering a draft mode, clicking the sheet or saving never moves the sheet.
+   Holds the polyline / wire draft row, or the per-mode hint when no draft row is showing. Nothing scrolls or clips inside it. */
+.takeoff-mode-slot { height: 78px; box-sizing: border-box; overflow: hidden; }
+.takeoff-mode-slot .space-draft-tools { height: 100%; box-sizing: border-box; flex-wrap: wrap; align-content: center; overflow: hidden; padding: 6px 12px; }
+.takeoff-mode-slot .space-draft-tools > * { flex: 0 0 auto; white-space: nowrap; }
+.takeoff-mode-slot .takeoff-help { display: flex; align-items: center; height: 100%; min-height: 0; box-sizing: border-box; padding: 6px 18px; overflow: hidden; border-top: 0; border-bottom: 1px solid var(--line); line-height: 1.3; }
+
+/* Toolbox summary: the active-part label shows only in Place mode; keep the summary one line so it cannot change the height above the sheet. */
+.component-toolbox summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.component-toolbox summary small { white-space: nowrap; overflow-wrap: normal; }
+
+/* Wire draft row */
+/* Wire row: line 1 = type picker (shrinks, ellipsis) + Undo point + Cancel; line 2 = status (ellipsis) + length. Same two lines at every width. */
+.wire-draft-tools { gap: 4px 10px; }
+.wire-draft-tools::after { content: ""; order: 4; flex: 1 1 100%; height: 0; }
+.wire-draft-tools .compact-field { order: 1; display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 150px; }
+.wire-draft-tools .compact-field select { flex: 1 1 auto; min-width: 0; text-overflow: ellipsis; }
+.wire-draft-tools #takeoff-wire-undo-point { order: 2; }
+.wire-draft-tools #takeoff-wire-cancel { order: 3; }
+.takeoff-mode-slot .wire-draft-tools #takeoff-wire-status { order: 5; flex: 1 1 0; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; font-size: .8rem; line-height: 1.25; }
+.takeoff-mode-slot .wire-draft-tools #takeoff-wire-length { order: 6; margin: 0; font-size: .8rem; line-height: 1.25; }
+.wire-draft-tools [hidden] { display: block; visibility: hidden; }
+#takeoff-wire-length { font-size: .85rem; font-weight: 700; }
+
+/* Wire styles: same colour and dash vocabulary as the one-line (.wiring-diagram .wire-*) plus two neutral types. */
+#takeoff-overlay .wire-zumnet, .wire-legend-row .wire-zumnet { fill: none; stroke: #6d3090; stroke-width: 3; stroke-dasharray: 8 4; }
+#takeoff-overlay .wire-zumlink, .wire-legend-row .wire-zumlink { fill: none; stroke: #e78a16; stroke-width: 3; }
+#takeoff-overlay .wire-control, .wire-legend-row .wire-control { fill: none; stroke: #e32621; stroke-width: 2.5; }
+#takeoff-overlay .wire-analog, .wire-legend-row .wire-analog { fill: none; stroke: #078044; stroke-width: 2.5; }
+#takeoff-overlay .wire-ethernet, .wire-legend-row .wire-ethernet { fill: none; stroke: #3c4e57; stroke-width: 2.5; stroke-dasharray: 10 3 2 3; }
+#takeoff-overlay .wire-cresnet, .wire-legend-row .wire-cresnet { fill: none; stroke: #13232a; stroke-width: 2.5; stroke-dasharray: 14 4; }
+#takeoff-overlay .wire-emergency, .wire-legend-row .wire-emergency { fill: none; stroke: #13232a; stroke-width: 2.5; stroke-dasharray: 3 3; }
+#takeoff-overlay path[class*="wire-"] { vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+
+/* Wire groups: only the drawn-wire hit stroke takes pointer events, and only in Select mode. */
+.plan-wire { pointer-events: none; }
+#takeoff-overlay[data-mode="select"] .plan-wire.drawn .plan-wire-hit { pointer-events: stroke; cursor: pointer; }
+.plan-wire-hit { fill: none; stroke: transparent; stroke-width: 16; }
+.plan-wire-halo { fill: none; stroke: #fff; stroke-width: 6; stroke-linejoin: round; opacity: .85; vector-effect: non-scaling-stroke; }
+.plan-wire-select { fill: none; stroke: var(--rust); stroke-width: 9; stroke-linejoin: round; opacity: .35; vector-effect: non-scaling-stroke; }
+#takeoff-overlay[data-mode="select"] .plan-wire.drawn:hover path[class^="wire-"] { stroke-width: 4; }
+.plan-wire-label { fill: #13232a; paint-order: stroke; stroke: #fff; stroke-width: 3px; font: 700 10px Arial,sans-serif; }
+#takeoff-overlay .plan-wire-end { fill: #fff; stroke-width: 2; }
+.plan-wire-ring { fill: none; stroke: var(--rust); stroke-width: 2; }
+.plan-wire-vertex { fill: #fff; stroke: var(--ink); stroke-width: 2; }
+.plan-wire-rubber { opacity: .55; }
+.plan-wire-draft-line { stroke-linejoin: round; }
+
+/* Plan wiring panel */
+.wire-legend-row { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; margin: 6px 0; font-size: 12px; }
+.wire-legend-row small { color: var(--muted); }
+#plan-wiring-panel .design-rule { margin-top: 8px; }
+#plan-wiring-panel details { margin-top: 8px; }
+#plan-wiring-panel summary { cursor: pointer; font-size: 12px; font-weight: 700; }
+
+/* Narrow main column (the plan panel takes ~590 px beside it from 861 px up): the draft rows stack, one line per item, never clipped or scrolled. */
+@media (min-width: 861px) and (max-width: 1059px) {
+  .takeoff-mode-slot { height: 138px; }
+  .takeoff-mode-slot .wire-draft-tools .compact-field { flex: 1 1 100%; }
+  .takeoff-mode-slot .wire-draft-tools #takeoff-wire-status, .takeoff-mode-slot .wire-draft-tools #takeoff-wire-length { flex: 1 1 100%; }
+  .takeoff-mode-slot .space-draft-tools:not(.wire-draft-tools) > span { flex: 1 1 100%; margin: 0; order: -1; }
+}
+
+/* 44 px touch targets under 860 px, matching the existing takeoff rule. */
+@media (max-width: 860px) {
+  .takeoff-tools-end { margin-left: 0; width: 100%; }
+  .takeoff-tools .secondary-button, .recent-chip, .wire-draft-tools .compact-field select, .wire-draft-tools button { min-height: 44px; }
+  .recent-strip { height: 66px; scroll-snap-type: x proximity; }
+  .recent-chip { scroll-snap-align: start; }
+  .takeoff-mode-slot { height: 84px; }
+  .takeoff-mode-slot .takeoff-help { padding: 6px 12px; }
+}
+
+/* Phones: stacked rows, 44 px controls. */
+@media (max-width: 539px) {
+  .takeoff-mode-slot { height: 146px; }
+  .takeoff-mode-slot .wire-draft-tools .compact-field { flex: 1 1 100%; }
+  .takeoff-mode-slot .wire-draft-tools #takeoff-wire-status, .takeoff-mode-slot .wire-draft-tools #takeoff-wire-length { flex: 1 1 100%; }
+  .takeoff-mode-slot .space-draft-tools:not(.wire-draft-tools) > span { flex: 1 1 100%; margin: 0; order: -1; }
+}

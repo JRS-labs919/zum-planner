@@ -23,6 +23,7 @@ const icons = {
   shade: '<path d="M4 4h16v4H4ZM6 8v12M18 8v12M9 12h6M9 16h6"/>',
   controls: '<rect x="5" y="3" width="14" height="18" rx="2"/><circle cx="12" cy="9" r="2"/><path d="M9 15h6"/>',
   equipment: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h8M8 15h4M16 15h.01"/>',
+  wire: '<circle cx="5" cy="6" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 6h6a3 3 0 0 1 3 3v0a3 3 0 0 0 3 3v4"/>',
   link: '<path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1"/>',
   lineItem: '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>',
   area: '<path d="m3 11 9-8 9 8"/><path d="M5 10v11h14V10M9 21v-7h6v7"/>',
@@ -230,6 +231,7 @@ const defaultState = () => ({
     scale: null,
     markups: [],
     catalog: [],
+    recentCatalogIds: [],
     analysis: null,
     lastSyncAt: null
   },
@@ -982,11 +984,16 @@ function collectWizardFields() {
 
 function openReport(reportId = "projectPackage") {
   const report = REPORTS.find(item => item.id === reportId) || REPORTS.at(-1);
+  const isOneLine = report.id === "oneLine";
+  const oneLineReady = isOneLine && oneLineHasContent(state);
+  const sheet = oneLineReady ? layoutOneLine(oneLineModelFromState(state)) : null;
   showModal(`
     ${modalHeader(report.name, `${state.project.name} · Generated from current local project data`)}
     ${report.id === "projectPackage" ? '<div class="program-package-action"><button class="primary-button" type="button" id="open-programming">Custom programming</button> <button class="secondary-button" type="button" id="open-program-files">Program files</button></div>' : ""}
     <div class="modal-body report-preview" id="printable-report">${generateReport(report.id)}</div>
     <footer class="modal-footer">
+      ${isOneLine ? `${oneLineReady ? `<p class="field-help one-line-export-note">Print / Save PDF prints the drawing alone on one landscape page sized to it (Chrome or Edge). Sheet size ${sheet.W} x ${sheet.H} px. Download HTML keeps the full report.</p>` : ""}
+      <button class="secondary-button" type="button" id="download-svg"${oneLineReady ? "" : ' disabled title="No one-line content yet. Add controllers, network equipment or links."'}>${svgButtonLabel("download", "Download SVG")}</button>` : ""}
       <button class="secondary-button" type="button" id="download-report">${svgButtonLabel("download", "Download HTML")}</button>
       <button class="primary-button" type="button" id="print-report">${svgButtonLabel("printer", "Print / Save PDF")}</button>
     </footer>`, true);
@@ -998,11 +1005,19 @@ function openReport(reportId = "projectPackage") {
     $("#files-back").onclick = () => openReport("projectPackage");
   });
   $("#open-programming")?.addEventListener("click", () => openProgramming());
-  $("#print-report").addEventListener("click", () => window.print());
+  $("#print-report").addEventListener("click", () => oneLineReady ? printOneLine() : window.print());
   $("#download-report").addEventListener("click", () => {
-    const html = standaloneReportHTML(report.name, generateReport(report.id));
+    const html = standaloneReportHTML(report.name, generateReport(report.id), isOneLine ? { native: true } : {});
     downloadBlob(new Blob([html], { type: "text/html" }), `${slugify(state.project.name)}-${report.id}.html`);
     showToast("Report downloaded");
+  });
+  $("#download-svg")?.addEventListener("click", () => {
+    try {
+      downloadBlob(new Blob([oneLineSVGDocument()], { type: "image/svg+xml;charset=utf-8" }), `${slugify(state.project.name)}-oneLine.svg`);
+      showToast("One-line SVG downloaded");
+    } catch (error) {
+      showToast("Could not create the SVG file");
+    }
   });
 }
 
@@ -1015,7 +1030,7 @@ function generateReport(reportId) {
     takeoff: () => `${reportMasthead("Plan Takeoff Register")}${takeoffRegisterSection()}`,
     bom: () => `${reportMasthead("Zūm Bill of Material")}${bomSection()}`,
     loadSchedule: () => `${reportMasthead("Load & Zone Schedule")}${loadScheduleSection()}`,
-    oneLine: () => `${reportMasthead("Zūm Wiring One-Line")}${oneLineSection()}`,
+    oneLine: () => `${reportMasthead("Zūm Wiring One-Line")}${oneLineSection({ native: true })}`,
     soo: () => `${reportMasthead("Sequence of Operations")}${sooSection()}`,
     controlIntent: () => `${reportMasthead("Device & Control Intent")}${controlIntentSection()}`,
     projectPackage: () => `${reportMasthead("Crestron Zūm Design Package")}${projectSummarySection()}${takeoffRegisterSection()}${loadScheduleSection()}${bomSection()}${sooSection()}${controlIntentSection()}${oneLineSection()}`
@@ -1098,23 +1113,15 @@ function controlIntentSection() {
   ], recordsFor("roomDevices"));
 }
 
-function oneLineSection() {
+function oneLineSection(options = {}) {
   const controllers = recordsFor("controllers");
   const network = recordsFor("network");
   const links = recordsFor("links");
   if (!controllers.length && !network.length && !links.length) return "";
   const checks = designChecks();
-  return `<section class="report-section"><h3>Zūm wiring one-line</h3>
+  return `<section class="report-section one-line-section"><h3>Zūm wiring one-line</h3>
     <p class="report-meta" style="text-align:left">Configured spaces show their assigned controller outputs. The connection schedule includes planned zone outputs and connections entered in Wiring &amp; Links.</p>
-    <div class="wiring-sheet">${buildWiringDiagram()}</div>
-    <div class="diagram-legend">
-      <span><i class="legend-line zumnet"></i>Zūm Net - room-to-room</span>
-      <span><i class="legend-line zumlink"></i>Zūm Link - in-room</span>
-      <span><i class="legend-line mesh"></i>Zūm Mesh wireless</span>
-      <span><i class="legend-line control"></i>SW / LV load control</span>
-      <span><i class="legend-line analog"></i>24 VDC / analog</span>
-      <span><i class="legend-line ethernet"></i>Ethernet / PoE</span>
-    </div>
+    <div class="wiring-sheet${options.native ? ' native' : ""}"${options.native ? ' tabindex="0" role="region" aria-label="One-line drawing - scroll to view"' : ""}>${buildWiringDiagram()}</div>
     ${scheduledPaths(links)}
     <div class="design-rules">${checks.map(check => `<div class="design-rule ${check.warning ? "warning" : ""}">${icon(check.warning ? "alert" : "info")}<span>${escapeHTML(check.text)}</span></div>`).join("")}</div>
   </section>
@@ -1132,165 +1139,7 @@ function scheduledPaths(links) {
 }
 
 function buildWiringDiagram() {
-  const controllers = recordsFor("controllers");
-  const roomDevices = recordsFor("roomDevices");
-  const loads = recordsFor("loads");
-  const network = recordsFor("network");
-  const spaces = state.spaces || [];
-  const linkedToSpace = (row, space) => row.spaceId ? row.spaceId === space.id : row.area === space.name;
-  const rooms = spaces.map(space => ({
-    name: space.name,
-    configured: true,
-    controllers: controllers.filter(row => linkedToSpace(row, space)),
-    loads: loads.filter(row => linkedToSpace(row, space)),
-    devices: roomDevices.filter(row => linkedToSpace(row, space))
-  }));
-  const legacyRows = [...controllers, ...roomDevices, ...loads].filter(row => !spaces.some(space => linkedToSpace(row, space)));
-  const legacyAreas = [...new Set(legacyRows.map(row => row.area || "Unassigned Zūm space"))];
-  if (!rooms.length && !legacyAreas.length) legacyAreas.push("Unassigned Zūm space");
-  legacyAreas.forEach(name => {
-    const inArea = row => legacyRows.includes(row) && (row.area || "Unassigned Zūm space") === name;
-    rooms.push({ name, controllers: controllers.filter(inArea), devices: roomDevices.filter(inArea), loads: loads.filter(inArea) });
-  });
-
-  const width = 1120;
-  const top = 138;
-  let nextRoomY = top;
-  for (const room of rooms) {
-    room.y = nextRoomY;
-    room.configured = room.configured && (room.controllers.some(row => row.configured || row.zoneId) || !room.controllers.length);
-    room.unassigned = room.loads.filter(load => !room.controllers.some(row => row.zoneId === load.id));
-    room.height = room.configured ? 58 + 72 * Math.max(1, room.controllers.length + room.unassigned.length)
-      + (room.devices.length ? 28 + 54 * Math.ceil(room.devices.length / 3) : 0) : 178;
-    nextRoomY += room.height;
-  }
-  const height = nextRoomY + 82;
-  const backboneX = 265;
-  const networkNodes = network.length ? network.slice(0, 5) : [{ name: "Upstream network", model: "Hub / switch not yet selected", equipmentType: "Network" }];
-  const parts = [`<svg class="wiring-diagram" viewBox="0 0 ${width} ${height}" role="img" aria-label="Generated Crestron Zūm system wiring diagram">`,
-    `<defs><marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#6d3090"/></marker><marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#e78a16"/></marker><marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#e32621"/></marker></defs>`,
-    `<text x="24" y="20" class="diagram-title">CRESTRON ZŪM SYSTEM</text>`,
-    `<text x="24" y="37" class="diagram-detail">${escapeHTML(state.project.architecture)} · ${escapeHTML(state.project.voltage)}</text>`
-  ];
-
-  networkNodes.forEach((item, index) => {
-    const x = 25 + index * 190;
-    parts.push(diagramNode(x, 50, 166, 52, item.name, item.model || item.equipmentType || "Network", "network"));
-    if (index > 0) parts.push(`<path d="M ${x - 24} 76 H ${x}" class="wire-ethernet"/>`);
-  });
-  const lastNetworkX = 25 + (networkNodes.length - 1) * 190 + 166;
-  parts.push(`<path d="M ${lastNetworkX} 102 H ${backboneX} V ${height - 48}" class="wire-zumnet" marker-end="url(#arrow-purple)"/>`);
-  parts.push(`<text x="${backboneX + 8}" y="124" class="diagram-detail">Zūm Net backbone</text>`);
-
-  rooms.forEach(room => {
-    const {name: area, y, controllers: areaControllers, devices: areaDevices, loads: areaLoads} = room;
-    if (room.configured) {
-      parts.push(configuredRoomDiagram(room, backboneX));
-      return;
-    }
-    const primary = areaControllers.find(record => /primary/i.test(record.networkRole || "")) || areaControllers[0];
-    const secondary = areaControllers.filter(record => record !== primary);
-    const isMesh = /ZUMMESH|Mesh/i.test(`${primary?.model || ""} ${primary?.networkRole || ""}`);
-
-    parts.push(`<rect x="290" y="${y - 20}" width="805" height="154" class="room-frame" rx="10"/>`);
-    parts.push(`<text x="306" y="${y + 1}" class="room-label">${escapeHTML(area)}</text>`);
-    parts.push(`<path d="M ${backboneX} ${y + 48} H 323" class="${isMesh ? "wire-mesh" : "wire-zumnet"}" marker-end="url(#arrow-purple)"/>`);
-
-    if (primary) parts.push(diagramNode(323, y + 20, 205, 48, primary.name, primary.model || primary.networkRole, "controller"));
-    else parts.push(diagramNode(323, y + 20, 205, 48, "Primary controller required", "Select a ZUMNET or ZUMMESH controller", "controller"));
-
-    const shownSecondary = secondary.slice(0, 2);
-    shownSecondary.forEach((controller, index) => {
-      const sy = y + 84 + index * 31;
-      parts.push(`<path d="M 425 ${y + 68} V ${sy + 15} H 548" class="${/Mesh/i.test(controller.networkRole || "") ? "wire-mesh" : "wire-zumlink"}"/>`);
-      parts.push(diagramNode(548, sy, 198, 28, controller.name, controller.model, "controller", true));
-    });
-    if (secondary.length > 2) parts.push(`<text x="552" y="${y + 147}" class="diagram-detail">+${secondary.length - 2} more controllers</text>`);
-
-    const shownDevices = areaDevices.slice(0, 2);
-    shownDevices.forEach((device, index) => {
-      const dy = y + 20 + index * 57;
-      const wireClass = /analog|24 VDC/i.test(device.connection || "") ? "wire-analog" : (/Mesh/i.test(device.connection || "") ? "wire-mesh" : "wire-zumlink");
-      parts.push(`<path d="M 528 ${y + 44} H 765 V ${dy + 23}" class="${wireClass}"/>`);
-      parts.push(diagramNode(765, dy, 145, 44, device.name, device.model || device.deviceType, "device"));
-    });
-    if (areaDevices.length > 2) parts.push(`<text x="768" y="${y + 145}" class="diagram-detail">+${areaDevices.length - 2} more room devices</text>`);
-
-    const shownLoads = areaLoads.slice(0, 2);
-    shownLoads.forEach((load, index) => {
-      const ly = y + 20 + index * 57;
-      const loadBusY = y + 125 + index * 5;
-      parts.push(`<path d="M 425 ${y + 68} V ${loadBusY} H 920 V ${ly + 23} H 930" class="wire-control" marker-end="url(#arrow-red)"/>`);
-      parts.push(diagramNode(930, ly, 145, 44, load.name, `${load.controlType || "Control TBD"} · Qty ${load.quantity || 1}`, "load"));
-    });
-    if (areaLoads.length > 2) parts.push(`<text x="933" y="${y + 145}" class="diagram-detail">+${areaLoads.length - 2} more load zones</text>`);
-  });
-
-  parts.push(`<text x="24" y="${height - 22}" class="diagram-detail">Generated design one-line - not a terminal-by-terminal installation drawing.</text>`, `</svg>`);
-  return parts.join("");
-}
-
-function configuredRoomDiagram(room, backboneX) {
-  const { y } = room;
-  const parts = [
-    `<rect x="290" y="${y - 20}" width="805" height="${room.height - 15}" class="room-frame" rx="10"/>`,
-    `<text x="306" y="${y + 1}" class="room-label">${escapeHTML(room.name)}</text>`
-  ];
-  const ordered = [...room.controllers].sort((a, b) =>
-    Number(b.assignmentRole === "primary") - Number(a.assignmentRole === "primary"));
-  const linkPrimary = ordered.find(row => row.assignmentRole === "primary" && row.model?.startsWith("ZUMNET-"));
-  const linkBranches = ordered.map((row, index) => ({row, index}))
-    .filter(({row}) => row.assignmentRole === "secondary" && row.model?.startsWith("ZUMLINK-"));
-  if (linkPrimary && linkBranches.length) {
-    const startY = y + 50 + ordered.indexOf(linkPrimary) * 72;
-    const lastY = y + 38 + linkBranches.at(-1).index * 72;
-    parts.push(`<g class="logical-link-bus"><title>Logical Zūm Link bus. Port assignments and daisy-chain order are unspecified.</title>`,
-      `<text x="730" y="${y + 1}" class="diagram-detail">Logical Zūm Link bus · port order unspecified</text>`,
-      `<path d="M 320 ${startY} H 305 V ${lastY}" class="wire-zumlink"/>`);
-    for (const {row, index} of linkBranches) {
-      parts.push(`<path data-link-controller="${escapeHTML(row.id)}" d="M 305 ${y + 38 + index * 72} H 320" class="wire-zumlink"/>`);
-    }
-    parts.push("</g>");
-  }
-  let rowY = y + 16;
-  for (const row of ordered) {
-    const zone = room.loads.find(load => load.id === row.zoneId);
-    const primary = row.assignmentRole === "primary";
-    const side = primary ? "Primary" : row.assignmentRole === "secondary" ? "Secondary" : "Controller";
-    const unresolved = row.assignmentStatus === "REQUIRED INPUT" || !row.model;
-    if (row.model?.startsWith("ZUMNET-")) parts.push(`<path d="M ${backboneX} ${rowY + 21} H 320" class="wire-zumnet"/>`);
-    parts.push(diagramNode(320, rowY, 264, 44, `${side} · ${row.model || "Model required"}`, row.name, "controller"));
-    if (zone) {
-      parts.push(`<path data-controller-id="${escapeHTML(row.id)}" data-zone-id="${escapeHTML(zone.id)}" d="M 584 ${rowY + 22} H 733" class="wire-control" ${unresolved ? 'style="stroke-dasharray:4 4"' : 'marker-end="url(#arrow-red)"'}/>`);
-      parts.push(diagramNode(733, rowY, 335, 44, zone.name, `${zone.controlType || "Protocol required"} · Qty ${zone.quantity || 1}`, "load"));
-    }
-    const detail = row.assignmentDetail || (row.modelOverride ? "Manual model override." : !zone ? "No zone assigned." : "");
-    if (detail) parts.push(`<text x="320" y="${rowY + 59}" class="diagram-detail">${escapeHTML(detail)}</text>`);
-    rowY += 72;
-  }
-  for (const zone of room.unassigned) {
-    parts.push(diagramNode(733, rowY, 335, 44, zone.name, "REQUIRED INPUT · Assign a controller", "load"));
-    rowY += 72;
-  }
-  if (!ordered.length && !room.unassigned.length) {
-    parts.push(diagramNode(320, rowY, 264, 44, "Controller assignment pending", "No linked zones", "controller"));
-    rowY += 72;
-  }
-  if (room.devices.length) {
-    parts.push(`<text x="320" y="${rowY + 4}" class="diagram-label">Room devices</text>`);
-    room.devices.forEach((device, index) => {
-      parts.push(diagramNode(320 + (index % 3) * 250, rowY + 14 + Math.floor(index / 3) * 54,
-        236, 44, device.name, device.model || device.deviceType, "device"));
-    });
-  }
-  return parts.join("");
-}
-
-function diagramNode(x, y, width, height, title, detail, kind, compact = false) {
-  const safeTitle = escapeHTML(truncateDiagramText(title || "Unnamed", compact ? 26 : 30));
-  const safeDetail = escapeHTML(truncateDiagramText(detail || "", compact ? 29 : 34));
-  const titleSize = compact ? 9 : 10;
-  return `<g><title>${escapeHTML(title || "Unnamed")} · ${escapeHTML(detail || "")}</title><rect x="${x}" y="${y}" width="${width}" height="${height}" class="node ${kind}"/><text x="${x + 9}" y="${y + (compact ? 12 : 17)}" class="diagram-label" style="font-size:${titleSize}px">${safeTitle}</text><text x="${x + 9}" y="${y + (compact ? 23 : 34)}" class="diagram-detail">${safeDetail}</text></g>`;
+  return renderOneLineSVG(layoutOneLine(oneLineModelFromState(state)), state.project);
 }
 
 function truncateDiagramText(text, limit) {
@@ -1340,8 +1189,11 @@ function designChecks() {
   return checks;
 }
 
-function standaloneReportHTML(title, body) {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHTML(title)}</title><style>body{max-width:1100px;margin:40px auto;padding:0 24px;font:14px Arial;color:#202824}.report-masthead{display:flex;justify-content:space-between;border-bottom:3px solid #005d80;padding-bottom:20px}.report-masthead h2{font:32px Georgia;margin:0 0 7px}.report-meta{text-align:right;line-height:1.6;color:#5e6f77;font-size:12px}.report-section{margin-top:28px}.report-section h3{font:20px Georgia;border-bottom:1px solid #d8dcd5;padding-bottom:7px}.report-table{width:100%;border-collapse:collapse;font-size:12px}.report-table th,.report-table td{padding:8px;text-align:left;border-bottom:1px solid #e4e6e1}.report-table th{background:#edf4f6;text-transform:uppercase}.soo-area{padding:12px 14px;margin:10px 0;border-left:3px solid #65a8bf;background:#f4f8f9}.soo-area p{margin:5px 0 0}.wiring-sheet{margin-top:18px;padding:12px;border:1px solid #cfdde2;background:#fbfdfe}.wiring-diagram{width:100%;height:auto}.wiring-diagram .room-frame{fill:#f8fbfc;stroke:#aabac1}.wiring-diagram .node{fill:white;stroke:#254854;stroke-width:1.3}.wiring-diagram .node.network{fill:#e6f4f8;stroke:#006c94}.wiring-diagram .node.controller{fill:#f5f8fa}.wiring-diagram .node.device{fill:#fff8ec;stroke:#bd7e1d}.wiring-diagram .node.load{fill:#fff3f1;stroke:#c94436}.wiring-diagram .diagram-title{fill:#153440;font:700 13px Arial}.wiring-diagram .diagram-label{fill:#1d343d;font:600 10px Arial}.wiring-diagram .diagram-detail{fill:#62757d;font:9px Arial}.wiring-diagram .room-label{fill:#005d80;font:700 12px Arial}.wire-zumnet{fill:none;stroke:#6d3090;stroke-width:3;stroke-dasharray:8 4}.wire-zumlink{fill:none;stroke:#e78a16;stroke-width:3}.wire-control{fill:none;stroke:#e32621;stroke-width:2.5}.wire-analog{fill:none;stroke:#078044;stroke-width:2.5}.wire-mesh{fill:none;stroke:#168ab2;stroke-width:2.5;stroke-dasharray:2 5}.wire-ethernet{fill:none;stroke:#3c4e57;stroke-width:2.5;stroke-dasharray:10 3 2 3}.diagram-legend{display:flex;flex-wrap:wrap;gap:10px 18px;margin:12px 0;font-size:11px}.diagram-legend span{display:flex;align-items:center;gap:6px}.legend-line{width:24px;height:3px}.zumnet{background:#6d3090}.zumlink{background:#e78a16}.control{background:#e32621}.analog{background:#078044}.mesh{background:#168ab2}.ethernet{background:#3c4e57}.design-rules{display:grid;grid-template-columns:1fr 1fr;gap:8px}.design-rule{padding:9px;border:1px solid #d7e3e7;background:#f6fafb;font-size:11px}.design-rule svg{display:none}.design-rule.warning{border-color:#ecd5b4;background:#fff8ee}</style></head><body>${body}</body></html>`;
+function standaloneReportHTML(title, body, options = {}) {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHTML(title)}</title><style>body{max-width:1100px;margin:40px auto;padding:0 24px;font:14px Arial;color:#202824}.report-masthead{display:flex;justify-content:space-between;border-bottom:3px solid #005d80;padding-bottom:20px}.report-masthead h2{font:32px Georgia;margin:0 0 7px}.report-meta{text-align:right;line-height:1.6;color:#5e6f77;font-size:12px}.report-section{margin-top:28px}.report-section h3{font:20px Georgia;border-bottom:1px solid #d8dcd5;padding-bottom:7px}.report-table{width:100%;border-collapse:collapse;font-size:12px}.report-table th,.report-table td{padding:8px;text-align:left;border-bottom:1px solid #e4e6e1}.report-table th{background:#edf4f6;text-transform:uppercase}.soo-area{padding:12px 14px;margin:10px 0;border-left:3px solid #65a8bf;background:#f4f8f9}.soo-area p{margin:5px 0 0}.wiring-sheet{margin-top:18px;padding:12px;border:1px solid #cfdde2;background:#fbfdfe}.wiring-diagram{width:100%;height:auto}.wiring-diagram .room-frame{fill:#f8fbfc;stroke:#aabac1}.wiring-diagram .node{fill:white;stroke:#254854;stroke-width:1.3}.wiring-diagram .node.network{fill:#e6f4f8;stroke:#006c94}.wiring-diagram .node.controller{fill:#f5f8fa}.wiring-diagram .node.device{fill:#fff8ec;stroke:#bd7e1d}.wiring-diagram .node.load{fill:#fff3f1;stroke:#c94436}.wiring-diagram .diagram-title{fill:#153440;font:700 13px Arial}.wiring-diagram .diagram-label{fill:#1d343d;font:600 10px Arial}.wiring-diagram .diagram-detail{fill:#62757d;font:9px Arial}.wiring-diagram .room-label{fill:#005d80;font:700 12px Arial}.wire-zumnet{fill:none;stroke:#6d3090;stroke-width:3;stroke-dasharray:8 4}.wire-zumlink{fill:none;stroke:#e78a16;stroke-width:3}.wire-control{fill:none;stroke:#e32621;stroke-width:2.5}.wire-analog{fill:none;stroke:#078044;stroke-width:2.5}.wire-mesh{fill:none;stroke:#168ab2;stroke-width:2.5;stroke-dasharray:2 5}.wire-ethernet{fill:none;stroke:#3c4e57;stroke-width:2.5;stroke-dasharray:10 3 2 3}.diagram-legend{display:flex;flex-wrap:wrap;gap:10px 18px;margin:12px 0;font-size:11px}.diagram-legend span{display:flex;align-items:center;gap:6px}.legend-line{width:24px;height:3px}.zumnet{background:#6d3090}.zumlink{background:#e78a16}.control{background:#e32621}.analog{background:#078044}.mesh{background:#168ab2}.ethernet{background:#3c4e57}.design-rules{display:grid;grid-template-columns:1fr 1fr;gap:8px}.design-rule{padding:9px;border:1px solid #d7e3e7;background:#f6fafb;font-size:11px}.design-rule svg{display:none}.design-rule.warning{border-color:#ecd5b4;background:#fff8ee}</style></head><body>${body}</body></html>`;
+  if (!options.native) return html;
+  // One-line report: native width (no 1100 px cap) and a landscape page.
+  return html.replace("max-width:1100px;", "").replace("</style>", "@page { size: landscape }.wiring-sheet{overflow:auto}.wiring-diagram{width:auto;max-width:none;height:auto}</style>");
 }
 
 function currentLabelFor(stageId) {

@@ -1,0 +1,6 @@
+/* One-line report: HTML-level rules only. The drawing's own styles are embedded in the SVG
+   (ONE_LINE_SVG_STYLE in one-line.js) so every export renders the same. */
+.wiring-sheet.native { overflow: auto; }
+.wiring-sheet.native .wiring-diagram { width: auto; min-width: 0; max-width: none; height: auto; }
+.wiring-sheet.native:focus-visible { outline: 2px solid #005d80; outline-offset: 2px; }
+.one-line-export-note { margin-right: auto; align-self: center; max-width: 52em; }

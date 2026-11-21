@@ -72,8 +72,35 @@ function toolboxItems() {
     || String(a.tag || a.model || a.name).localeCompare(String(b.tag || b.model || b.name), undefined, {numeric:true}));
 }
 
+// Toolbox open state, search text, category and results scroll survive
+// re-renders while the user stays on the takeoff view (reset in renderPlanTakeoff).
+const toolboxUiState = { open: false, search: "", category: "", scrollTop: 0 };
+
+function resetToolboxUiState() {
+  Object.assign(toolboxUiState, { open: false, search: "", category: "", scrollTop: 0 });
+}
+
+// Most recently used catalog entries, front-inserted, at most 8.
+function touchRecentCatalog(id) {
+  if (!id) return;
+  ensureTakeoffState();
+  state.takeoff.recentCatalogIds = [id, ...state.takeoff.recentCatalogIds.filter(item => item !== id)].slice(0, 8);
+}
+
+function takeoffRecentStripHTML(activeId) {
+  ensureTakeoffState();
+  const chips = state.takeoff.recentCatalogIds.map(id => state.takeoff.catalog.find(entry => entry.id === id)).filter(Boolean).slice(0, 8).map(entry => {
+    const label = toolboxStampLabel(entry);
+    const text = entry.model || entry.tag || entry.name;
+    const active = takeoffMode === "stamp" && entry.id === activeId;
+    const description = `Place ${label} · ${text} · ${entry.name}`;
+    return `<button type="button" class="tool-toggle recent-chip ${active ? "active" : ""}" data-recent-catalog="${escapeHTML(entry.id)}" aria-pressed="${active}" aria-label="${escapeHTML(description)}" title="${escapeHTML(description)}"><span class="markup-chip ${escapeHTML(entry.category)}">${escapeHTML(label)}</span><span class="recent-chip-text">${escapeHTML(text)}</span></button>`;
+  });
+  return `<div class="recent-strip" role="group" aria-label="Recent products"><span class="recent-strip-label">Recent</span>${chips.length ? chips.join("") : '<span class="field-help">Products you place appear here</span>'}</div>`;
+}
+
 function takeoffToolboxHTML(activeEntry) {
-  return `<details id="takeoff-toolbox" class="component-toolbox"><summary>Component toolbox
+  return `<details id="takeoff-toolbox" class="component-toolbox" ${toolboxUiState.open ? "open" : ""}><summary>Component toolbox
     ${activeEntry && takeoffMode === "stamp" ? `<small>${escapeHTML(toolboxStampLabel(activeEntry))} · ${escapeHTML(activeEntry.model || activeEntry.tag)}</small>` : ""}
     </summary><div class="toolbox-body"><div class="toolbox-filters">
     <label>Search components<input type="search" id="takeoff-toolbox-search" placeholder="Model, fixture tag or function"></label>
@@ -110,8 +137,12 @@ function bindTakeoffToolbox() {
     results.innerHTML = groups.size ? Array.from(groups, ([name, buttons]) =>
       `<section><h4>${name}</h4><div>${buttons.join("")}</div></section>`).join("") : "<p>No matching components.</p>";
   }
-  search.addEventListener("input", filter);
-  category.addEventListener("change", filter);
+  search.value = toolboxUiState.search;
+  category.value = toolboxUiState.category;
+  box.addEventListener("toggle", () => { toolboxUiState.open = box.open; });
+  results.addEventListener("scroll", () => { toolboxUiState.scrollTop = results.scrollTop; });
+  search.addEventListener("input", () => { toolboxUiState.search = search.value; filter(); });
+  category.addEventListener("change", () => { toolboxUiState.category = category.value; filter(); });
   box.querySelector("#toolbox-custom").addEventListener("click", () => openTakeoffCatalogEditor());
   results.addEventListener("click", event => {
     const button = event.target.closest("[data-toolbox-index]");
@@ -126,13 +157,17 @@ function bindTakeoffToolbox() {
       entry.stampCode = toolboxStampLabel(entry);
       saveState("Component mapping added");
     }
+    toolboxUiState.open = box.open;
     takeoffActiveCatalogId = entry.id;
+    touchRecentCatalog(entry.id);
+    saveState("Component selected");
     takeoffLabelPreview = null;
     takeoffCalibrationPoint = null;
-    takeoffRoomDrag = takeoffPolylineDraft = null;
+    takeoffRoomDrag = takeoffPolylineDraft = takeoffWireDraft = null;
     takeoffMode = "stamp";
     window.renderPlanTakeoff();
     document.querySelector("#takeoff-toolbox summary")?.focus({preventScroll:true});
   });
   filter();
+  results.scrollTop = toolboxUiState.scrollTop;
 }
